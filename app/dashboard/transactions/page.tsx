@@ -88,22 +88,49 @@ export default function TransactionsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const categories = [
+    { id: 'all', label: 'All Transactions' },
+    { id: 'funding', label: 'Wallet Funding' },
+    { id: 'data', label: 'Data' },
+    { id: 'airtime', label: 'Airtime' },
+    { id: 'cable', label: 'Cable TV' },
+    { id: 'electricity', label: 'Electricity' },
+    { id: 'exam', label: 'Exam Pins' },
+    { id: 'betting', label: 'Bet Funding' },
+    { id: 'vpn', label: 'VPN' },
+    { id: 'proxy', label: 'Proxies' },
+    { id: 'otp', label: 'OTP Rentals' },
+    { id: 'bulk_sms', label: 'Bulk SMS' },
+    { id: 'airtime_cash', label: 'Airtime to Cash' },
+    { id: 'social', label: 'Social Boost' },
+  ];
+
   // Dynamic Filtering Strategy
   const filteredTransactions = transactions.filter((tx) => {
     const detailsLower = tx.details.toLowerCase();
+    const typeLower = tx.type.toLowerCase();
     
     // Category match check
     let matchesCategory = true;
-    if (activeCategory === 'funding') matchesCategory = tx.type === 'funding';
-    else if (activeCategory === 'airtime') matchesCategory = detailsLower.includes('airtime');
-    else if (activeCategory === 'data') matchesCategory = detailsLower.includes('data');
-    else if (activeCategory === 'cable') matchesCategory = detailsLower.includes('dstv') || detailsLower.includes('gotv') || detailsLower.includes('startimes') || detailsLower.includes('cable');
-    else if (activeCategory === 'electricity') matchesCategory = detailsLower.includes('electricity') || detailsLower.includes('electric');
+    if (activeCategory === 'funding') matchesCategory = typeLower.includes('funding') || typeLower.includes('credit');
+    else if (activeCategory === 'data') matchesCategory = detailsLower.includes('data') || typeLower.includes('data');
+    else if (activeCategory === 'airtime') matchesCategory = detailsLower.includes('airtime') || typeLower.includes('airtime');
+    else if (activeCategory === 'cable') matchesCategory = detailsLower.includes('dstv') || detailsLower.includes('gotv') || detailsLower.includes('startimes') || typeLower.includes('cable');
+    else if (activeCategory === 'electricity') matchesCategory = detailsLower.includes('electricity') || detailsLower.includes('electric') || typeLower.includes('electricity');
+    else if (activeCategory === 'exam') matchesCategory = detailsLower.includes('waec') || detailsLower.includes('neco') || detailsLower.includes('exam') || typeLower.includes('exam');
+    else if (activeCategory === 'betting') matchesCategory = detailsLower.includes('bet') || detailsLower.includes('sporty') || typeLower.includes('betting');
+    else if (activeCategory === 'vpn') matchesCategory = detailsLower.includes('vpn') || typeLower.includes('vpn');
+    else if (activeCategory === 'proxy') matchesCategory = detailsLower.includes('proxy') || typeLower.includes('proxy');
+    else if (activeCategory === 'otp') matchesCategory = detailsLower.includes('otp') || detailsLower.includes('rental') || typeLower.includes('otp');
+    else if (activeCategory === 'bulk_sms') matchesCategory = detailsLower.includes('bulk sms') || typeLower.includes('bulk_sms');
+    else if (activeCategory === 'airtime_cash') matchesCategory = detailsLower.includes('cash') || typeLower.includes('airtime_cash');
+    else if (activeCategory === 'social') matchesCategory = detailsLower.includes('boost') || detailsLower.includes('followers') || typeLower.includes('social');
 
     // Search query match check
     const q = searchQuery.toLowerCase();
     const matchesSearch = 
       detailsLower.includes(q) ||
+      typeLower.includes(q) ||
       tx.id.toLowerCase().includes(q) ||
       (tx.token && tx.token.toLowerCase().includes(q)) ||
       tx.amount.toString().includes(q);
@@ -112,7 +139,7 @@ export default function TransactionsPage() {
   });
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gray-50 flex flex-col pb-12">
       <nav className="bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -149,7 +176,7 @@ export default function TransactionsPage() {
           <div className="w-full md:w-72">
             <input
               type="text"
-              placeholder="Search ref, token, amount..."
+              placeholder="Search ref, service, amount..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
@@ -157,19 +184,19 @@ export default function TransactionsPage() {
           </div>
         </div>
 
-        {/* Filter Badges */}
-        <div className="flex flex-wrap gap-2 mb-6">
-          {['all', 'funding', 'airtime', 'data', 'cable', 'electricity'].map((cat) => (
+        {/* Filter Badges Carousel / Grid */}
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-none">
+          {categories.map((cat) => (
             <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-4 py-1.5 rounded-xl text-xs font-semibold capitalize transition ${
-                activeCategory === cat
+              key={cat.id}
+              onClick={() => setActiveCategory(cat.id)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
+                activeCategory === cat.id
                   ? 'bg-blue-600 text-white shadow-sm'
                   : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
               }`}
             >
-              {cat}
+              {cat.label}
             </button>
           ))}
         </div>
@@ -202,8 +229,8 @@ export default function TransactionsPage() {
                       <td className="py-4 px-6 font-medium text-gray-900">{tx.details}</td>
                       <td className="py-4 px-6">
                         <span
-                          className={`text-[10px] font-bold px-2.5 py-1 rounded-full capitalize ${
-                            tx.type === 'funding'
+                          className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase ${
+                            tx.type.includes('funding') || tx.type.includes('credit')
                               ? 'bg-green-100 text-green-700'
                               : 'bg-blue-100 text-blue-700'
                           }`}
@@ -211,16 +238,20 @@ export default function TransactionsPage() {
                           {tx.type}
                         </span>
                       </td>
-                      <td className={`py-4 px-6 font-bold ${tx.type === 'funding' ? 'text-green-600' : 'text-gray-900'}`}>
-                        {tx.type === 'funding' ? '+' : '-'}₦{tx.amount.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
+                      <td className={`py-4 px-6 font-bold whitespace-nowrap ${tx.type.includes('funding') || tx.type.includes('credit') ? 'text-green-600' : 'text-gray-900'}`}>
+                        {tx.type.includes('funding') || tx.type.includes('credit') ? '+' : '-'}₦{tx.amount.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
                       </td>
                       <td className="py-4 px-6">
-                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 capitalize">
+                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border capitalize ${
+                          tx.status === 'success' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                          tx.status === 'failed' ? 'bg-red-50 text-red-600 border-red-200' :
+                          'bg-amber-50 text-amber-600 border-amber-200'
+                        }`}>
                           {tx.status || 'success'}
                         </span>
                       </td>
-                      <td className="py-4 px-6 text-xs text-gray-500">
-                        {new Date(tx.created_at).toLocaleString()}
+                      <td className="py-4 px-6 text-xs text-gray-500 whitespace-nowrap">
+                        {new Date(tx.created_at).toLocaleString('en-NG', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </td>
                       <td className="py-4 px-6 text-right">
                         <button
@@ -257,7 +288,7 @@ export default function TransactionsPage() {
             {selectedTx.token && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 mb-4 text-center">
                 <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">
-                  Electricity Token
+                  Token / Code / Details
                 </p>
                 <p className="text-xl font-mono font-extrabold text-amber-950 tracking-wider my-1 select-all">
                   {selectedTx.token}
@@ -266,7 +297,7 @@ export default function TransactionsPage() {
                   onClick={() => handleCopyToken(selectedTx.token!)}
                   className="text-[11px] font-bold text-amber-700 hover:text-amber-900 underline transition"
                 >
-                  {copied ? '✓ Token Copied!' : 'Copy Token'}
+                  {copied ? '✓ Copied!' : 'Copy Item'}
                 </button>
               </div>
             )}
@@ -274,7 +305,10 @@ export default function TransactionsPage() {
             <div className="space-y-3 text-sm mb-6">
               <div className="flex justify-between py-1 border-b border-gray-50">
                 <span className="text-gray-500">Status</span>
-                <span className="font-bold text-green-600 capitalize">{selectedTx.status || 'Success'}</span>
+                <span className={`font-bold capitalize ${
+                  selectedTx.status === 'success' ? 'text-emerald-600' :
+                  selectedTx.status === 'failed' ? 'text-red-600' : 'text-amber-600'
+                }`}>{selectedTx.status || 'Success'}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-gray-50">
                 <span className="text-gray-500">Description</span>
@@ -288,7 +322,7 @@ export default function TransactionsPage() {
               </div>
               <div className="flex justify-between py-1 border-b border-gray-50">
                 <span className="text-gray-500">Type</span>
-                <span className="font-medium text-gray-900 capitalize">{selectedTx.type}</span>
+                <span className="font-medium text-gray-900 uppercase">{selectedTx.type}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-gray-50">
                 <span className="text-gray-500">Date</span>

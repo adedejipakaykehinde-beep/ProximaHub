@@ -1,34 +1,21 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// Helper function to generate VTpass-required Request ID (YYYYMMDDHHMM + random string)
-function generateRequestId() {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const timestamp = `${year}${month}${day}${hours}${minutes}`;
-  const randomStr = Math.random().toString(36).substring(2, 10);
-  return `${timestamp}${randomStr}`;
-}
-
-// Map network frontend values to VTpass serviceIDs
-function getServiceID(network: string): string {
+// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: 9MOBILE, 4: AIRTEL)
+function getBigisubNetworkId(network: string): number {
   const net = network.toLowerCase().trim();
   switch (net) {
     case 'mtn':
-      return 'mtn-data';
-    case 'airtel':
-      return 'airtel-data';
+      return 1;
     case 'glo':
-      return 'glo-data';
+      return 2;
     case '9mobile':
     case 'etisalat':
-      return 'etisalat-data';
+      return 3;
+    case 'airtel':
+      return 4;
     default:
-      return `${net}-data`;
+      return 1;
   }
 }
 
@@ -79,42 +66,45 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Failed to process balance deduction' }, { status: 500 });
     }
 
-    // 5. CALL VTPASS API
-    const requestId = generateRequestId();
-    const serviceID = getServiceID(network);
+    // 5. CALL BIGISUB API
+    const networkId = getBigisubNetworkId(network);
+    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng/api';
 
-    const vtpassRes = await fetch('https://sandbox.vtpass.com/api/pay', {
+    const bigisubRes = await fetch(`${baseUrl}/data/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'api-key': process.env.VTPASS_API_KEY || '',
-        'secret-key': process.env.VTPASS_SECRET_KEY || '',
+        'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
       },
       body: JSON.stringify({
-        request_id: requestId,
-        serviceID: serviceID,
-        billersCode: phoneNumber,
-        variation_code: planId,
-        amount: Number(amount),
-        phone: phoneNumber,
+        network: networkId,
+        mobile_number: phoneNumber,
+        plan: planId,
+        Ported_number: true,
       }),
     });
 
-    const vtpassData = await vtpassRes.json();
+    const bigisubData = await bigisubRes.json();
 
-    // 6. Log raw VTpass response and verify status ("000" means transaction successful)
-    console.log('VTPass Raw Response:', vtpassData);
+    // 6. Verify status from Bigisub response
+    const isSuccessful = 
+      bigisubRes.ok && 
+      (bigisubData?.status === 'success' || 
+       bigisubData?.Status === 'successful' || 
+       bigisubData?.status === true);
 
-    if (vtpassData?.code !== '000') {
-      // Refund user balance if VTpass failed
+    if (!isSuccessful) {
+      // Refund user balance if Bigisub transaction failed
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
         .eq('id', profile.id);
 
-      const errorReason = vtpassData?.response_description 
-        || vtpassData?.message 
-        || `VTpass Error Code: ${vtpassData?.code || 'UNKNOWN'}`;
+      const errorReason = 
+        bigisubData?.error || 
+        bigisubData?.message || 
+        bigisubData?.detail || 
+        'Data purchase failed on provider network.';
 
       return NextResponse.json(
         { message: errorReason },
@@ -123,10 +113,11 @@ export async function POST(req: Request) {
     }
 
     // 7. Log transaction history upon success
+    const reference = bigisubData?.id || bigisubData?.ident || Date.now().toString();
     await supabase.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
-      details: `${network.toUpperCase()} Data Top-up (${phoneNumber}) - Ref: ${requestId}`,
+      details: `${network.toUpperCase()} Data Top-up (${phoneNumber}) - Ref: ${reference}`,
       amount: amount,
       status: 'success',
     });
@@ -135,7 +126,7 @@ export async function POST(req: Request) {
       success: true, 
       message: 'Data purchase successful!',
       newBalance,
-      requestId 
+      reference 
     });
 
   } catch (error: any) {

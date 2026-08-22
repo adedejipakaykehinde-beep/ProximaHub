@@ -30,6 +30,7 @@ export default function AdminDashboard() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedServiceFilter, setSelectedServiceFilter] = useState('all');
   
   // Fund/Debit modal state
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
@@ -75,7 +76,7 @@ export default function AdminDashboard() {
       .from('transactions')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (txData) {
       setTransactions(txData);
@@ -139,15 +140,35 @@ export default function AdminDashboard() {
     fetchAdminData();
   };
 
+  const handleUpdateTxStatus = async (txId: string, newStatus: string) => {
+    setActionLoading(true);
+    const { error } = await supabase
+      .from('transactions')
+      .update({ status: newStatus })
+      .eq('id', txId);
+
+    if (error) {
+      alert(`Failed to update status: ${error.message}`);
+    } else {
+      fetchAdminData();
+    }
+    setActionLoading(false);
+  };
+
   const filteredProfiles = profiles.filter((p) =>
     (p.full_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (p.email || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const filteredTransactions = transactions.filter((tx) => {
+    if (selectedServiceFilter === 'all') return true;
+    return tx.type.toLowerCase().includes(selectedServiceFilter.toLowerCase());
+  });
+
   const totalSystemBalance = profiles.reduce((acc, curr) => acc + (curr.wallet_balance || 0), 0);
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-gray-100 flex flex-col font-sans pb-12">
       {/* Header */}
       <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -239,11 +260,34 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        {/* Transactions Log */}
+        {/* Transactions Log with All Services Filter */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-gray-100">
-            <h2 className="text-lg font-bold text-gray-900">Recent System Transactions</h2>
-            <p className="text-xs text-gray-500">Real-time log of airtime, data, cable, and electricity orders</p>
+          <div className="p-6 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Recent Services & Orders</h2>
+              <p className="text-xs text-gray-500">Manage order status and view transactions across all services</p>
+            </div>
+
+            {/* Service Filter dropdown */}
+            <select
+              value={selectedServiceFilter}
+              onChange={(e) => setSelectedServiceFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 outline-none focus:ring-2 focus:ring-blue-600"
+            >
+              <option value="all">All Services</option>
+              <option value="data">Data</option>
+              <option value="airtime">Airtime</option>
+              <option value="cable">Cable TV</option>
+              <option value="electricity">Electricity</option>
+              <option value="exam">Exam Pins</option>
+              <option value="betting">Bet Funding</option>
+              <option value="vpn">VPN</option>
+              <option value="proxy">Proxies</option>
+              <option value="otp">OTP / SMS Rental</option>
+              <option value="bulk_sms">Bulk SMS</option>
+              <option value="airtime_cash">Airtime to Cash</option>
+              <option value="social">Social Boost</option>
+            </select>
           </div>
 
           <div className="overflow-x-auto">
@@ -255,26 +299,43 @@ export default function AdminDashboard() {
                   <th className="px-6 py-3">Amount</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Date</th>
+                  <th className="px-6 py-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {transactions.length === 0 ? (
+                {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-gray-400">No transactions recorded yet</td>
+                    <td colSpan={6} className="px-6 py-8 text-center text-gray-400">No transactions found for this selection</td>
                   </tr>
                 ) : (
-                  transactions.map((tx) => (
+                  filteredTransactions.map((tx) => (
                     <tr key={tx.id} className="hover:bg-gray-50 transition">
                       <td className="px-6 py-4 font-bold uppercase text-xs text-gray-800">{tx.type}</td>
-                      <td className="px-6 py-4">{tx.details}</td>
-                      <td className="px-6 py-4 font-semibold text-gray-900">₦{tx.amount.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-xs font-medium text-gray-700">{tx.details}</td>
+                      <td className="px-6 py-4 font-semibold text-gray-900 whitespace-nowrap">₦{tx.amount.toLocaleString('en-NG')}</td>
                       <td className="px-6 py-4">
-                        <span className="bg-emerald-50 text-emerald-700 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-200">
+                        <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                          tx.status === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          tx.status === 'failed' ? 'bg-red-50 text-red-700 border-red-200' :
+                          'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
                           {tx.status}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-xs text-gray-400">
-                        {new Date(tx.created_at).toLocaleString()}
+                      <td className="px-6 py-4 text-xs text-gray-400 whitespace-nowrap">
+                        {new Date(tx.created_at).toLocaleString('en-NG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <select
+                          disabled={actionLoading}
+                          value={tx.status}
+                          onChange={(e) => handleUpdateTxStatus(tx.id, e.target.value)}
+                          className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 font-semibold text-gray-700 outline-none focus:ring-1 focus:ring-blue-600"
+                        >
+                          <option value="success">Success</option>
+                          <option value="pending">Pending</option>
+                          <option value="failed">Failed</option>
+                        </select>
                       </td>
                     </tr>
                   ))
