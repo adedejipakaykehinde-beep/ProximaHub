@@ -19,9 +19,41 @@ function getBigisubNetworkId(network: string): number {
   }
 }
 
+// Map custom codes/slugs to actual Bigisub Plan IDs
+function parsePlanId(planId: string | number): number {
+  if (typeof planId === 'number') return planId;
+  if (!isNaN(Number(planId))) return Number(planId);
+
+  // Bigisub Plan ID mappings
+  const planMap: Record<string, number> = {
+    'mtn-20mb': 201,
+    'mtn-20mb-wa': 202,
+    'mtn-200mb-soc': 203,
+    'mtn-200mb': 204,
+    'mtn-1gb-awoof': 217, // 1GB Awoof @ 269
+    'mtn-1gb-daily': 218,
+    'mtn-500mb-sme': 205,
+    'mtn-1gb-sme': 206,
+    'mtn-2gb-sme': 207,
+    'mtn-3gb-sme': 208,
+    'mtn-5gb-sme': 209,
+    'mtn-10gb-sme': 210,
+    'airtel-100mb': 301,
+    'airtel-300mb': 302,
+    'airtel-1gb': 303,
+    'airtel-2gb': 304,
+    'glo-200mb': 401,
+    'glo-1gb': 402,
+    '9mob-1gb': 501,
+  };
+
+  return planMap[planId] || 217;
+}
+
 export async function POST(req: Request) {
   try {
-    const { network, planId, phoneNumber, amount } = await req.json();
+    const body = await req.json();
+    const { network, planId, phoneNumber, amount } = body;
 
     if (!network || !planId || !phoneNumber || !amount) {
       return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
@@ -68,33 +100,50 @@ export async function POST(req: Request) {
 
     // 5. CALL BIGISUB API
     const networkId = getBigisubNetworkId(network);
+    const numericPlanId = parsePlanId(planId);
     const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng/api';
 
-    const bigisubRes = await fetch(`${baseUrl}/data/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
-      },
-      body: JSON.stringify({
-        network: networkId,
-        mobile_number: phoneNumber,
-        plan: planId,
-        Ported_number: true,
-      }),
-    });
+    let bigisubData: any = {};
+    let isSuccessful = false;
 
-    const bigisubData = await bigisubRes.json();
+    try {
+      const bigisubRes = await fetch(`${baseUrl}/data/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
+        },
+        body: JSON.stringify({
+          network: networkId,
+          mobile_number: phoneNumber,
+          plan: numericPlanId,
+          Ported_number: true,
+        }),
+      });
 
-    // 6. Verify status from Bigisub response
-    const isSuccessful = 
-      bigisubRes.ok && 
-      (bigisubData?.status === 'success' || 
-       bigisubData?.Status === 'successful' || 
-       bigisubData?.status === true);
+      const responseText = await bigisubRes.text();
 
+      // Safely parse JSON response
+      try {
+        bigisubData = JSON.parse(responseText);
+      } catch (jsonErr) {
+        console.error('Bigisub non-JSON response:', responseText);
+        bigisubData = { error: 'Invalid response from data provider API.' };
+      }
+
+      isSuccessful = 
+        bigisubRes.ok && 
+        (bigisubData?.status === 'success' || 
+         bigisubData?.Status === 'successful' || 
+         bigisubData?.status === true);
+
+    } catch (apiErr: any) {
+      console.error('Bigisub fetch network error:', apiErr);
+      bigisubData = { error: 'Network error connecting to data provider.' };
+    }
+
+    // 6. Handle failure & refund user
     if (!isSuccessful) {
-      // Refund user balance if Bigisub transaction failed
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
@@ -107,7 +156,7 @@ export async function POST(req: Request) {
         'Data purchase failed on provider network.';
 
       return NextResponse.json(
-        { message: errorReason },
+        { success: false, message: errorReason },
         { status: 400 }
       );
     }
@@ -131,6 +180,6 @@ export async function POST(req: Request) {
 
   } catch (error: any) {
     console.error('Data purchase error:', error);
-    return NextResponse.json({ message: error?.message || 'Server error' }, { status: 500 });
+    return NextResponse.json({ success: false, message: error?.message || 'Server error' }, { status: 500 });
   }
 }
