@@ -62,7 +62,7 @@ export async function POST(req: Request) {
       .update({ wallet_balance: profile.wallet_balance - numAmount })
       .eq('id', profile.id);
 
-    // 4. Prepare Exact Payload as specified in Bigisub API Documentation
+    // 4. Send Request to Bigisub API
     const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng';
     const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
     const cleanPhone = String(phoneNumber).trim();
@@ -70,16 +70,16 @@ export async function POST(req: Request) {
     const payload = {
       network: getBigisubNetworkId(network),
       phone_number: cleanPhone,
-      amount: String(numAmount), // Bigisub documentation requires amount as string "100"
-      airtime_type: "vtu",       // Lowercase "vtu" as shown in request body
-      pin: "1234"                // 4-digit Bigisub PIN
+      amount: String(numAmount),
+      airtime_type: "vtu",
+      pin: "1234"
     };
 
     const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/airtime/purchase/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Token ${apiKey}`,
       },
       body: JSON.stringify(payload),
     });
