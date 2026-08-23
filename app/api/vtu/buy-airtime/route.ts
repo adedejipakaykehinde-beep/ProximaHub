@@ -10,8 +10,8 @@ function getNetworkId(network: string): number {
   const net = String(network).toLowerCase().trim();
   if (net.includes('mtn')) return 1;
   if (net.includes('glo')) return 2;
-  if (net.includes('9mobile') || net.includes('etisalat')) return 3;
-  if (net.includes('airtel')) return 4;
+  if (net.includes('airtel')) return 3;
+  if (net.includes('9mobile') || net.includes('etisalat')) return 4;
   return 1;
 }
 
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: 'Session expired. Please log in again.' }, { status: 401 });
     }
 
-    // 1. Verify Balance
+    // 1. Check User Balance
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, wallet_balance')
@@ -53,65 +53,40 @@ export async function POST(req: Request) {
     }
 
     if (profile.wallet_balance < numAmount) {
-      return NextResponse.json({ success: false, message: `Insufficient balance (₦${profile.wallet_balance}).` }, { status: 400 });
+      return NextResponse.json({ success: false, message: `Insufficient wallet balance. You have ₦${profile.wallet_balance}` }, { status: 400 });
     }
 
-    // 2. Try Bigisub Endpoints in order
+    // 2. Call Bigisub API v2 with PIN 2258
     const apiKey = '1e34035a5330a62c7066697df8cb485c92d85285';
     const networkId = getNetworkId(network);
 
-    const endpoints = [
-      'https://bigisub.ng/api/topup/',
-      'https://bigisub.ng/api/airtime/',
-      'https://bigisub.ng/api/pay/'
-    ];
+    const bigisubRes = await fetch('https://api.bigisub.ng/api/v2/vtu/airtime/purchase/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Token ${apiKey}`,
+      },
+      body: JSON.stringify({
+        network: networkId,
+        amount: numAmount,
+        mobile_number: targetPhone,
+        airtime_type: 'VTU',
+        Ported_number: true,
+        pin: '2258',
+      }),
+    });
 
-    let bigisubRes: Response | null = null;
-    let responseText = '';
-    let successfulEndpoint = '';
-
-    for (const url of endpoints) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': `Token ${apiKey}`,
-          },
-          body: JSON.stringify({
-            network: networkId,
-            amount: numAmount,
-            mobile_number: targetPhone,
-            airtime_type: 'VTU',
-            Ported_number: true,
-          }),
-        });
-
-        const text = await res.text();
-        if (res.status !== 404 && !text.startsWith('<!DOCTYPE') && !text.startsWith('<html')) {
-          bigisubRes = res;
-          responseText = text;
-          successfulEndpoint = url;
-          break;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-
-    if (!bigisubRes || !responseText) {
-      return NextResponse.json({ 
-        success: false, 
-        message: 'Bigisub airtime endpoints returned 404. Check documentation inside bigisub.ng dashboard under API settings.' 
-      }, { status: 400 });
-    }
-
+    const responseText = await bigisubRes.text();
     let bigisubData: any = {};
+
     try {
       bigisubData = JSON.parse(responseText);
     } catch (e) {
-      return NextResponse.json({ success: false, message: `Invalid response from Bigisub at ${successfulEndpoint}` }, { status: 400 });
+      return NextResponse.json({ 
+        success: false, 
+        message: `Provider Error (${bigisubRes.status}): ${responseText.slice(0, 100)}` 
+      }, { status: 400 });
     }
 
     const isSuccessful = 
@@ -125,11 +100,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: String(errorMsg) }, { status: 400 });
     }
 
-    // 3. Deduct Wallet & Save Record
+    // 3. Deduct User Wallet Balance & Save Transaction
     const newBalance = profile.wallet_balance - numAmount;
     await supabaseAdmin.from('profiles').update({ wallet_balance: newBalance }).eq('id', profile.id);
 
-    const reference = bigisubData?.id || Date.now().toString();
+    const reference = bigisubData?.id || bigisubData?.reference || Date.now().toString();
     await supabaseAdmin.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
