@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
+// Force Next.js to treat this route as dynamically rendered at request time
+export const dynamic = 'force-dynamic';
+
 // Map network name to Bigisub numeric network IDs
 function getBigisubNetworkId(network: string): number {
   const net = network.toLowerCase().trim();
@@ -112,7 +115,8 @@ export async function POST(req: Request) {
         bigisubRes.ok && 
         (bigisubData?.success === true || 
          bigisubData?.data?.status === 'successful' || 
-         bigisubData?.status === 'success');
+         bigisubData?.status === 'success' ||
+         bigisubData?.status === 'successful');
 
     } catch (apiErr: any) {
       console.error('Bigisub network error:', apiErr);

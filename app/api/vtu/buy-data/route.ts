@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
+// Force Next.js to treat this route as dynamically rendered at request time
+export const dynamic = 'force-dynamic';
+
 // Helper to normalize network ID (1: MTN, 2: GLO, 3: AIRTEL, 4: 9MOBILE)
 function parseNetworkId(networkInput: any): number {
   if (typeof networkInput === 'number') return networkInput;
@@ -33,7 +36,10 @@ export async function POST(req: Request) {
     const amount = Number(body.amount);
 
     if (!network || !planId || !phoneNumber || !amount) {
-      return NextResponse.json({ message: 'Missing required parameters: network, plan, phone number, or amount' }, { status: 400 });
+      return NextResponse.json(
+        { message: 'Missing required parameters: network, plan, phone number, or amount' }, 
+        { status: 400 }
+      );
     }
 
     // 1. Authenticate User session
@@ -88,6 +94,7 @@ export async function POST(req: Request) {
         plan: Number(planId),
         phone_number: String(phoneNumber).trim(),
         Ported_number: true,
+        pin: '2258',
       };
 
       const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
@@ -113,7 +120,8 @@ export async function POST(req: Request) {
         bigisubRes.ok && 
         (bigisubData?.success === true || 
          bigisubData?.status === 'success' ||
-         bigisubData?.Status === 'successful');
+         bigisubData?.Status === 'successful' ||
+         bigisubData?.status === 'successful');
 
     } catch (apiErr: any) {
       console.error('Bigisub Data purchase network error:', apiErr);
