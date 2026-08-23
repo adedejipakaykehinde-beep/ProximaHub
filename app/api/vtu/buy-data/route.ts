@@ -1,16 +1,21 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: AIRTEL, 4: 9MOBILE)
-function getBigisubNetworkId(network: string): number {
-  const net = network.toLowerCase().trim();
+// Helper to normalize network ID (1: MTN, 2: GLO, 3: AIRTEL, 4: 9MOBILE)
+function parseNetworkId(networkInput: any): number {
+  if (typeof networkInput === 'number') return networkInput;
+  const net = String(networkInput).toLowerCase().trim();
   switch (net) {
+    case '1':
     case 'mtn':
       return 1;
+    case '2':
     case 'glo':
       return 2;
+    case '3':
     case 'airtel':
       return 3;
+    case '4':
     case '9mobile':
     case 'etisalat':
       return 4;
@@ -19,47 +24,19 @@ function getBigisubNetworkId(network: string): number {
   }
 }
 
-// Map custom codes/slugs to actual Bigisub Plan IDs
-function parsePlanId(planId: string | number): number {
-  if (typeof planId === 'number') return planId;
-  if (!isNaN(Number(planId))) return Number(planId);
-
-  // Bigisub Plan ID mappings
-  const planMap: Record<string, number> = {
-    'mtn-20mb': 201,
-    'mtn-20mb-wa': 202,
-    'mtn-200mb-soc': 203,
-    'mtn-200mb': 204,
-    'mtn-1gb-awoof': 217, 
-    'mtn-1gb-daily': 218,
-    'mtn-500mb-sme': 205,
-    'mtn-1gb-sme': 206,
-    'mtn-2gb-sme': 207,
-    'mtn-3gb-sme': 208,
-    'mtn-5gb-sme': 209,
-    'mtn-10gb-sme': 210,
-    'airtel-100mb': 301,
-    'airtel-300mb': 302,
-    'airtel-1gb': 303,
-    'airtel-2gb': 304,
-    'glo-200mb': 401,
-    'glo-1gb': 402,
-    '9mob-1gb': 501,
-  };
-
-  return planMap[planId] || 135;
-}
-
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { network, planId, phoneNumber, amount } = body;
+    const network = parseNetworkId(body.network);
+    const planId = body.planId || body.plan;
+    const phoneNumber = body.phoneNumber || body.phone_number || body.phone;
+    const amount = Number(body.amount);
 
     if (!network || !planId || !phoneNumber || !amount) {
-      return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
+      return NextResponse.json({ message: 'Missing required parameters: network, plan, phone number, or amount' }, { status: 400 });
     }
 
-    // 1. Get user using Authorization Bearer token or direct session fallback
+    // 1. Authenticate User session
     const authHeader = req.headers.get('Authorization');
     const token = authHeader ? authHeader.replace('Bearer ', '') : null;
 
@@ -71,7 +48,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Unauthorized. Please log in again.' }, { status: 401 });
     }
 
-    // 2. Fetch user's current profile & balance
+    // 2. Fetch User Profile
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('id, wallet_balance')
@@ -82,12 +59,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'User profile not found' }, { status: 404 });
     }
 
-    // 3. Check if user has sufficient funds
+    // 3. Check Wallet Balance
     if (profile.wallet_balance < amount) {
       return NextResponse.json({ message: 'Insufficient wallet balance' }, { status: 400 });
     }
 
-    // 4. Temporarily deduct funds before triggering provider
+    // 4. Temporarily Deduct Balance
     const newBalance = profile.wallet_balance - amount;
     const { error: updateError } = await supabase
       .from('profiles')
@@ -98,29 +75,29 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Failed to process balance deduction' }, { status: 500 });
     }
 
-    // 5. CALL BIGISUB API V2
-    const networkId = getBigisubNetworkId(network);
-    const numericPlanId = parsePlanId(planId);
+    // 5. Call Bigisub Data Purchase API V2
     const baseUrl = process.env.BIGISUB_BASE_URL || 'https://api.bigisub.ng';
+    const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
 
     let bigisubData: any = {};
     let isSuccessful = false;
 
     try {
+      const payload = {
+        network,
+        plan: Number(planId),
+        phone_number: String(phoneNumber).trim(),
+        Ported_number: true,
+      };
+
       const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'Authorization': `Token ${process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285'}`,
+          'Authorization': `Token ${apiKey}`,
         },
-        body: JSON.stringify({
-          network: networkId,
-          plan: numericPlanId,
-          mobile_number: phoneNumber,
-          Ported_number: true,
-          pin: '2258',
-        }),
+        body: JSON.stringify(payload),
       });
 
       const responseText = await bigisubRes.text();
@@ -129,21 +106,21 @@ export async function POST(req: Request) {
         bigisubData = JSON.parse(responseText);
       } catch (jsonErr) {
         console.error('Bigisub non-JSON response:', responseText);
-        bigisubData = { error: 'Invalid response from data provider API.' };
+        bigisubData = { error: 'Invalid response from provider API.' };
       }
 
       isSuccessful = 
         bigisubRes.ok && 
-        (bigisubData?.status === 'success' || 
-         bigisubData?.Status === 'successful' || 
-         bigisubData?.status === true);
+        (bigisubData?.success === true || 
+         bigisubData?.status === 'success' ||
+         bigisubData?.Status === 'successful');
 
     } catch (apiErr: any) {
-      console.error('Bigisub fetch network error:', apiErr);
+      console.error('Bigisub Data purchase network error:', apiErr);
       bigisubData = { error: 'Network error connecting to data provider.' };
     }
 
-    // 6. Handle failure & refund user
+    // 6. Refund if transaction failed
     if (!isSuccessful) {
       await supabase
         .from('profiles')
@@ -151,10 +128,10 @@ export async function POST(req: Request) {
         .eq('id', profile.id);
 
       const errorReason = 
-        bigisubData?.error || 
         bigisubData?.message || 
         bigisubData?.detail || 
-        'Data purchase failed on provider network.';
+        bigisubData?.error || 
+        'Validation failed on data provider network.';
 
       return NextResponse.json(
         { success: false, message: errorReason },
@@ -162,13 +139,13 @@ export async function POST(req: Request) {
       );
     }
 
-    // 7. Log transaction history upon success
-    const reference = bigisubData?.id || bigisubData?.reference || Date.now().toString();
+    // 7. Record Transaction
+    const reference = bigisubData?.data?.reference || bigisubData?.id || Date.now().toString();
     await supabase.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
-      details: `${network.toUpperCase()} Data Top-up (${phoneNumber}) - Ref: ${reference}`,
-      amount: amount,
+      details: `Data Purchase (₦${amount}) to ${phoneNumber} - Ref: ${reference}`,
+      amount,
       status: 'success',
     });
 
@@ -180,7 +157,7 @@ export async function POST(req: Request) {
     });
 
   } catch (error: any) {
-    console.error('Data purchase error:', error);
+    console.error('Data purchase server error:', error);
     return NextResponse.json({ success: false, message: error?.message || 'Server error' }, { status: 500 });
   }
 }

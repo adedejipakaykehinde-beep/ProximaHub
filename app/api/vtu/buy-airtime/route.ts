@@ -1,21 +1,16 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// Helper to normalize network ID (1: MTN, 2: GLO, 3: AIRTEL, 4: 9MOBILE)
-function parseNetworkId(networkInput: any): number {
-  if (typeof networkInput === 'number') return networkInput;
-  const net = String(networkInput).toLowerCase().trim();
+// Map network name to Bigisub numeric network IDs
+function getBigisubNetworkId(network: string): number {
+  const net = network.toLowerCase().trim();
   switch (net) {
-    case '1':
     case 'mtn':
       return 1;
-    case '2':
     case 'glo':
       return 2;
-    case '3':
     case 'airtel':
       return 3;
-    case '4':
     case '9mobile':
     case 'etisalat':
       return 4;
@@ -27,13 +22,15 @@ function parseNetworkId(networkInput: any): number {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const network = parseNetworkId(body.network);
-    const planId = body.planId || body.plan;
-    const phoneNumber = body.phoneNumber || body.phone_number || body.phone;
-    const amount = Number(body.amount);
+    const { network, phoneNumber, amount } = body;
 
-    if (!network || !planId || !phoneNumber || !amount) {
-      return NextResponse.json({ message: 'Missing required parameters: network, plan, phone number, or amount' }, { status: 400 });
+    if (!network || !phoneNumber || !amount) {
+      return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
+    }
+
+    const numAmount = Number(amount);
+    if (numAmount < 25) {
+      return NextResponse.json({ message: 'Minimum airtime purchase is ₦25' }, { status: 400 });
     }
 
     // 1. Authenticate User session
@@ -60,12 +57,12 @@ export async function POST(req: Request) {
     }
 
     // 3. Check Wallet Balance
-    if (profile.wallet_balance < amount) {
+    if (profile.wallet_balance < numAmount) {
       return NextResponse.json({ message: 'Insufficient wallet balance' }, { status: 400 });
     }
 
     // 4. Temporarily Deduct Balance
-    const newBalance = profile.wallet_balance - amount;
+    const newBalance = profile.wallet_balance - numAmount;
     const { error: updateError } = await supabase
       .from('profiles')
       .update({ wallet_balance: newBalance })
@@ -75,7 +72,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Failed to process balance deduction' }, { status: 500 });
     }
 
-    // 5. Call Bigisub Data Purchase API V2
+    // 5. Call Bigisub Airtime API V2
+    const networkId = getBigisubNetworkId(network);
     const baseUrl = process.env.BIGISUB_BASE_URL || 'https://api.bigisub.ng';
     const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
 
@@ -84,13 +82,14 @@ export async function POST(req: Request) {
 
     try {
       const payload = {
-        network,
-        plan: Number(planId),
+        network: networkId,
         phone_number: String(phoneNumber).trim(),
-        Ported_number: true,
+        amount: String(numAmount),
+        airtime_type: 'vtu',
+        pin: '2258',
       };
 
-      const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
+      const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/airtime/purchase/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -112,12 +111,12 @@ export async function POST(req: Request) {
       isSuccessful = 
         bigisubRes.ok && 
         (bigisubData?.success === true || 
-         bigisubData?.status === 'success' ||
-         bigisubData?.Status === 'successful');
+         bigisubData?.data?.status === 'successful' || 
+         bigisubData?.status === 'success');
 
     } catch (apiErr: any) {
-      console.error('Bigisub Data purchase network error:', apiErr);
-      bigisubData = { error: 'Network error connecting to data provider.' };
+      console.error('Bigisub network error:', apiErr);
+      bigisubData = { error: 'Network error connecting to airtime provider.' };
     }
 
     // 6. Refund if transaction failed
@@ -131,7 +130,7 @@ export async function POST(req: Request) {
         bigisubData?.message || 
         bigisubData?.detail || 
         bigisubData?.error || 
-        'Validation failed on data provider network.';
+        'Validation failed on provider network.';
 
       return NextResponse.json(
         { success: false, message: errorReason },
@@ -140,24 +139,24 @@ export async function POST(req: Request) {
     }
 
     // 7. Record Transaction
-    const reference = bigisubData?.data?.reference || bigisubData?.id || Date.now().toString();
+    const reference = bigisubData?.data?.reference || bigisubData?.data?.transaction_id || Date.now().toString();
     await supabase.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
-      details: `Data Purchase (₦${amount}) to ${phoneNumber} - Ref: ${reference}`,
-      amount,
+      details: `${network.toUpperCase()} Airtime Top-up (₦${numAmount}) to ${phoneNumber} - Ref: ${reference}`,
+      amount: numAmount,
       status: 'success',
     });
 
     return NextResponse.json({ 
       success: true, 
-      message: 'Data purchase successful!',
+      message: 'Airtime purchase successful!',
       newBalance,
       reference 
     });
 
   } catch (error: any) {
-    console.error('Data purchase server error:', error);
+    console.error('Airtime purchase server error:', error);
     return NextResponse.json({ success: false, message: error?.message || 'Server error' }, { status: 500 });
   }
 }
