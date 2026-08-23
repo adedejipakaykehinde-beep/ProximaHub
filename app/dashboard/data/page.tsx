@@ -193,7 +193,7 @@ export default function DashboardPage() {
       }
     } catch (err: any) {
       setErrorMsg('Network error. Please try again.');
-    } fontFinally: {
+    } finally {
       setLoading(false);
     }
   };
@@ -272,7 +272,7 @@ export default function DashboardPage() {
                   Select Network Provider
                 </label>
                 <div className="grid grid-cols-4 gap-3">
-                  {['MTN', 'Airtel', 'Glo', '9mobile'].map((net) => (
+                  {['MTN', 'Glo', 'Airtel', '9mobile'].map((net) => (
                     <button
                       key={net}
                       type="button"

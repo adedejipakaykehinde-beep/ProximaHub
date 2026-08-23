@@ -74,8 +74,8 @@ export default function AirtimePage() {
     }
 
     const numAmount = Number(amount);
-    if (!numAmount || numAmount < 50) {
-      setErrorMsg('Minimum airtime amount is ₦50');
+    if (!numAmount || numAmount < 25) {
+      setErrorMsg('Minimum airtime amount is ₦25');
       return;
     }
 
@@ -200,7 +200,7 @@ export default function AirtimePage() {
                   Select Network
                 </label>
                 <div className="grid grid-cols-4 gap-3">
-                  {['MTN', 'Airtel', 'Glo', '9mobile'].map((net) => (
+                  {['MTN', 'Glo', 'Airtel', '9mobile'].map((net) => (
                     <button
                       key={net}
                       type="button"
@@ -237,7 +237,7 @@ export default function AirtimePage() {
                 </label>
                 <input
                   type="number"
-                  min="50"
+                  min="25"
                   required
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}

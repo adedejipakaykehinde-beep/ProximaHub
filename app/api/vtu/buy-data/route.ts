@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: 9MOBILE, 4: AIRTEL)
+// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: AIRTEL, 4: 9MOBILE)
 function getBigisubNetworkId(network: string): number {
   const net = network.toLowerCase().trim();
   switch (net) {
@@ -9,10 +9,10 @@ function getBigisubNetworkId(network: string): number {
       return 1;
     case 'glo':
       return 2;
+    case 'airtel':
+      return 3;
     case '9mobile':
     case 'etisalat':
-      return 3;
-    case 'airtel':
       return 4;
     default:
       return 1;
@@ -30,7 +30,7 @@ function parsePlanId(planId: string | number): number {
     'mtn-20mb-wa': 202,
     'mtn-200mb-soc': 203,
     'mtn-200mb': 204,
-    'mtn-1gb-awoof': 217, // 1GB Awoof @ 269
+    'mtn-1gb-awoof': 217, 
     'mtn-1gb-daily': 218,
     'mtn-500mb-sme': 205,
     'mtn-1gb-sme': 206,
@@ -47,7 +47,7 @@ function parsePlanId(planId: string | number): number {
     '9mob-1gb': 501,
   };
 
-  return planMap[planId] || 217;
+  return planMap[planId] || 135;
 }
 
 export async function POST(req: Request) {
@@ -98,32 +98,33 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Failed to process balance deduction' }, { status: 500 });
     }
 
-    // 5. CALL BIGISUB API
+    // 5. CALL BIGISUB API V2
     const networkId = getBigisubNetworkId(network);
     const numericPlanId = parsePlanId(planId);
-    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng/api';
+    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://api.bigisub.ng';
 
     let bigisubData: any = {};
     let isSuccessful = false;
 
     try {
-      const bigisubRes = await fetch(`${baseUrl}/data/`, {
+      const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
+          'Accept': 'application/json',
+          'Authorization': `Token ${process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285'}`,
         },
         body: JSON.stringify({
           network: networkId,
-          mobile_number: phoneNumber,
           plan: numericPlanId,
+          mobile_number: phoneNumber,
           Ported_number: true,
+          pin: '2258',
         }),
       });
 
       const responseText = await bigisubRes.text();
 
-      // Safely parse JSON response
       try {
         bigisubData = JSON.parse(responseText);
       } catch (jsonErr) {
@@ -162,7 +163,7 @@ export async function POST(req: Request) {
     }
 
     // 7. Log transaction history upon success
-    const reference = bigisubData?.id || bigisubData?.ident || Date.now().toString();
+    const reference = bigisubData?.id || bigisubData?.reference || Date.now().toString();
     await supabase.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
