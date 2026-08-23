@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
 
 function getBigisubNetworkId(network: string): number {
   const net = network.toLowerCase().trim();
@@ -28,28 +33,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Minimum airtime amount is ₦50' }, { status: 400 });
     }
 
-    // 1. Authenticate user from Token or Payload
-    const authHeader = req.headers.get('Authorization');
-    const token = authHeader ? authHeader.replace('Bearer ', '') : null;
-
+    // Extract User ID directly or through Authorization header
     let targetUserId = userId;
 
-    if (token && token !== 'undefined' && token !== 'null') {
-      const { data: { user } } = await supabase.auth.getUser(token);
-      if (user?.id) targetUserId = user.id;
-    }
-
     if (!targetUserId) {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) targetUserId = session.user.id;
+      const authHeader = req.headers.get('Authorization');
+      const token = authHeader ? authHeader.replace('Bearer ', '') : null;
+      if (token && token !== 'undefined' && token !== 'null') {
+        const { data: { user } } = await supabaseAdmin.auth.getUser(token);
+        targetUserId = user?.id;
+      }
     }
 
     if (!targetUserId) {
       return NextResponse.json({ message: 'Authentication required. Please log in again.' }, { status: 401 });
     }
 
-    // 2. Fetch user profile
-    const { data: profile, error: profileError } = await supabase
+    // 1. Fetch user wallet balance
+    const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, wallet_balance')
       .eq('id', targetUserId)
@@ -63,18 +64,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: `Insufficient balance. Required: ₦${numAmount}, Available: ₦${profile.wallet_balance}` }, { status: 400 });
     }
 
-    // 3. Deduct balance temporarily
+    // 2. Temporarily deduct wallet balance
     const newBalance = profile.wallet_balance - numAmount;
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from('profiles')
       .update({ wallet_balance: newBalance })
       .eq('id', profile.id);
 
     if (updateError) {
-      return NextResponse.json({ message: 'Failed to deduct balance' }, { status: 500 });
+      return NextResponse.json({ message: 'Failed to process wallet deduction' }, { status: 500 });
     }
 
-    // 4. Send Request to Bigisub API
+    // 3. Send request to Bigisub Airtime API
     const networkId = getBigisubNetworkId(network);
     const apiKey = process.env.BIGISUB_API_KEY || '';
 
@@ -100,7 +101,7 @@ export async function POST(req: Request) {
       try {
         bigisubData = JSON.parse(responseText);
       } catch (e) {
-        // Alternative legacy fallback endpoint
+        // Fallback to primary endpoint if needed
         const fallbackRes = await fetch('https://bigisub.ng/api/topup/', {
           method: 'POST',
           headers: {
@@ -132,20 +133,20 @@ export async function POST(req: Request) {
       bigisubData = { error: 'Network error connecting to airtime provider.' };
     }
 
-    // 5. Refund if unsuccessful
+    // 4. Refund user if order failed
     if (!isSuccessful) {
-      await supabase
+      await supabaseAdmin
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
         .eq('id', profile.id);
 
-      const errorReason = bigisubData?.error || bigisubData?.message || bigisubData?.detail || 'Airtime transaction failed on provider.';
+      const errorReason = bigisubData?.error || bigisubData?.message || bigisubData?.detail || 'Airtime top-up failed on network provider.';
       return NextResponse.json({ success: false, message: errorReason }, { status: 400 });
     }
 
-    // 6. Record transaction
+    // 5. Log transaction
     const reference = bigisubData?.id || Date.now().toString();
-    await supabase.from('transactions').insert({
+    await supabaseAdmin.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
       details: `${network.toUpperCase()} Airtime (₦${numAmount}) to ${targetPhone} - Ref: ${reference}`,

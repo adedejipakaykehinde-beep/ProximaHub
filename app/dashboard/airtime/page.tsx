@@ -88,6 +88,13 @@ export default function AirtimePage() {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      const currentUserId = session?.user?.id;
+
+      if (!currentUserId) {
+        setErrorMsg('Authentication session expired. Please log in again.');
+        setLoading(false);
+        return;
+      }
 
       const res = await fetch('/api/vtu/buy-airtime', {
         method: 'POST',
@@ -96,6 +103,7 @@ export default function AirtimePage() {
           'Authorization': `Bearer ${session?.access_token || ''}`
         },
         body: JSON.stringify({
+          userId: currentUserId,
           network: selectedNetwork,
           phoneNumber,
           amount: numAmount,
