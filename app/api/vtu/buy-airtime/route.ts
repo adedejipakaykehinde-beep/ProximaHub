@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: 'Session expired. Please log in again.' }, { status: 401 });
     }
 
-    // 1. Check User Wallet
+    // 1. Verify Wallet Balance
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, wallet_balance')
@@ -56,14 +56,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: `Insufficient balance (₦${profile.wallet_balance}).` }, { status: 400 });
     }
 
-    // 2. Call Bigisub Airtime API
-    const apiKey = (process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285').trim();
+    // 2. Call Bigisub API with redirect protection
+    const apiKey = '1e34035a5330a62c7066697df8cb485c92d85285';
     const networkId = getNetworkId(network);
 
     const bigisubRes = await fetch('https://bigisub.ng/api/topup/', {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
         'Authorization': `Token ${apiKey}`,
       },
       body: JSON.stringify({
@@ -77,11 +79,11 @@ export async function POST(req: Request) {
 
     const responseText = await bigisubRes.text();
 
-    // Catch non-JSON (HTML 404/500) responses directly
-    if (!bigisubRes.ok || responseText.startsWith('<!DOCTYPE') || responseText.startsWith('<html')) {
+    // Catch redirects (301/302) or HTML responses
+    if (bigisubRes.status >= 300 && bigisubRes.status < 400) {
       return NextResponse.json({ 
         success: false, 
-        message: `Bigisub returned HTTP ${bigisubRes.status}. Check API Endpoint URL or Key in Bigisub Dashboard.` 
+        message: 'Bigisub redirected the request. Please verify topup endpoint in Bigisub API documentation.' 
       }, { status: 400 });
     }
 
@@ -89,7 +91,10 @@ export async function POST(req: Request) {
     try {
       bigisubData = JSON.parse(responseText);
     } catch (e) {
-      return NextResponse.json({ success: false, message: 'Invalid response from Bigisub API.' }, { status: 400 });
+      return NextResponse.json({ 
+        success: false, 
+        message: `Provider error (${bigisubRes.status}): Received HTML instead of JSON.` 
+      }, { status: 400 });
     }
 
     const isSuccessful = 
@@ -103,7 +108,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: String(errorMsg) }, { status: 400 });
     }
 
-    // 3. Deduct Wallet and Save Transaction
+    // 3. Deduct Wallet & Save Transaction
     const newBalance = profile.wallet_balance - numAmount;
     await supabaseAdmin.from('profiles').update({ wallet_balance: newBalance }).eq('id', profile.id);
 
