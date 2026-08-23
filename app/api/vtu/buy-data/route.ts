@@ -3,29 +3,18 @@ import { supabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
-function getBigisubNetworkId(network: string): number {
-  const net = network.toLowerCase().trim();
-  switch (net) {
-    case 'mtn': return 1;
-    case 'glo': return 2;
-    case 'airtel': return 3;
-    case '9mobile':
-    case 'etisalat': return 4;
-    default: return 1;
-  }
-}
-
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { network, phoneNumber, planId, amount } = body;
+    const { network, planId, phoneNumber, amount } = body;
 
-    if (!network || !phoneNumber || !planId) {
-      return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
+    if (!network || !planId || !phoneNumber) {
+      return NextResponse.json({ success: false, message: 'All fields are required' }, { status: 400 });
     }
 
     const numAmount = Number(amount || 0);
 
+    // 1. Authenticate user session
     const authHeader = req.headers.get('Authorization');
     const token = authHeader ? authHeader.replace('Bearer ', '') : null;
 
@@ -34,9 +23,10 @@ export async function POST(req: Request) {
       : await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ message: 'Unauthorized. Please log in again.' }, { status: 401 });
+      return NextResponse.json({ success: false, message: 'Unauthorized. Please log in again.' }, { status: 401 });
     }
 
+    // 2. Fetch User Profile
     const { data: profile } = await supabase
       .from('profiles')
       .select('id, wallet_balance')
@@ -44,23 +34,28 @@ export async function POST(req: Request) {
       .single();
 
     if (!profile || profile.wallet_balance < numAmount) {
-      return NextResponse.json({ message: 'Insufficient wallet balance' }, { status: 400 });
+      return NextResponse.json({ 
+        success: false, 
+        message: `Insufficient wallet balance. Balance: ₦${profile?.wallet_balance || 0}` 
+      }, { status: 400 });
     }
 
-    // Deduct
+    // 3. Deduct balance temporarily
     await supabase
       .from('profiles')
       .update({ wallet_balance: profile.wallet_balance - numAmount })
       .eq('id', profile.id);
 
-    const networkId = getBigisubNetworkId(network);
+    // 4. Send Request to Bigisub
     const baseUrl = process.env.BIGISUB_BASE_URL || 'https://api.bigisub.ng';
     const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
 
+    const cleanPhone = String(phoneNumber).trim();
+
     const payload = {
-      network: networkId,
-      mobile_number: String(phoneNumber).trim(),
-      phone_number: String(phoneNumber).trim(),
+      network: Number(network),
+      mobile_number: cleanPhone,
+      phone_number: cleanPhone,
       plan: Number(planId),
       plan_id: Number(planId),
       ported_number: false,
@@ -77,6 +72,7 @@ export async function POST(req: Request) {
 
     const responseText = await bigisubRes.text();
     let bigisubData: any = {};
+
     try {
       bigisubData = JSON.parse(responseText);
     } catch {
@@ -90,34 +86,45 @@ export async function POST(req: Request) {
        bigisubData?.success === true);
 
     if (!isSuccessful) {
-      // Refund
+      // Refund user balance
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
         .eq('id', profile.id);
 
-      const rawError = typeof bigisubData === 'object' ? JSON.stringify(bigisubData) : responseText;
-      const errorReason = 
-        bigisubData?.message || 
-        bigisubData?.detail || 
-        bigisubData?.error || 
-        rawError;
+      // Extract specific failure reason from Bigisub
+      let errorReason = 'Validation failed on provider network.';
+      if (typeof bigisubData === 'object') {
+        errorReason = 
+          bigisubData?.message || 
+          bigisubData?.detail || 
+          bigisubData?.error || 
+          JSON.stringify(bigisubData);
+      } else if (responseText) {
+        errorReason = responseText;
+      }
 
       return NextResponse.json({ success: false, message: errorReason }, { status: 400 });
     }
 
+    // 5. Insert successful transaction
     const newBalance = profile.wallet_balance - numAmount;
-    const reference = bigisubData?.data?.reference || Date.now().toString();
+    const reference = bigisubData?.data?.reference || bigisubData?.reference || Date.now().toString();
 
     await supabase.from('transactions').insert({
       user_id: profile.id,
       type: 'debit',
-      details: `${network.toUpperCase()} Data Purchase to ${phoneNumber}`,
+      details: `Data Purchase to ${cleanPhone}`,
       amount: numAmount,
       status: 'success',
     });
 
-    return NextResponse.json({ success: true, message: 'Data purchase successful!', newBalance, reference });
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Data purchase successful!', 
+      newBalance, 
+      reference 
+    });
 
   } catch (error: any) {
     return NextResponse.json({ success: false, message: error?.message || 'Server error' }, { status: 500 });
