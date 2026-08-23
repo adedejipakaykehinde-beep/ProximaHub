@@ -59,6 +59,7 @@ export async function POST(req: Request) {
       plan: Number(planId),
       plan_id: Number(planId),
       ported_number: false,
+      pin: "1234", // Make sure this matches your 4-digit PIN in your Bigisub portal settings
     };
 
     const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
@@ -92,7 +93,6 @@ export async function POST(req: Request) {
         .update({ wallet_balance: profile.wallet_balance })
         .eq('id', profile.id);
 
-      // Extract specific failure reason from Bigisub
       let errorReason = 'Validation failed on provider network.';
       if (typeof bigisubData === 'object') {
         errorReason = 
