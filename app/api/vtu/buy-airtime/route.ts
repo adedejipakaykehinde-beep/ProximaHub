@@ -6,7 +6,6 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
-// Map network name to Bigisub network ID
 function getNetworkId(network: string): number {
   const net = String(network).toLowerCase().trim();
   if (net.includes('mtn')) return 1;
@@ -25,14 +24,9 @@ export async function POST(req: Request) {
     const numAmount = Number(amount);
 
     if (!network || !targetPhone || !numAmount) {
-      return NextResponse.json({ success: false, message: 'Network, phone number, and amount are required.' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Network, phone, and amount are required.' }, { status: 400 });
     }
 
-    if (numAmount < 50) {
-      return NextResponse.json({ success: false, message: 'Minimum airtime amount is ₦50.' }, { status: 400 });
-    }
-
-    // Identify user
     let targetUserId = userId;
     if (!targetUserId) {
       const authHeader = req.headers.get('Authorization');
@@ -44,10 +38,10 @@ export async function POST(req: Request) {
     }
 
     if (!targetUserId) {
-      return NextResponse.json({ success: false, message: 'User session expired. Please log in again.' }, { status: 401 });
+      return NextResponse.json({ success: false, message: 'Session expired. Please log in again.' }, { status: 401 });
     }
 
-    // 1. Check User Wallet Balance
+    // 1. Check User Wallet
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, wallet_balance')
@@ -59,22 +53,18 @@ export async function POST(req: Request) {
     }
 
     if (profile.wallet_balance < numAmount) {
-      return NextResponse.json({ success: false, message: `Insufficient wallet balance. You have ₦${profile.wallet_balance}` }, { status: 400 });
+      return NextResponse.json({ success: false, message: `Insufficient balance (₦${profile.wallet_balance}).` }, { status: 400 });
     }
 
-    // 2. Temporarily deduct wallet balance
-    const newBalance = profile.wallet_balance - numAmount;
-    await supabaseAdmin.from('profiles').update({ wallet_balance: newBalance }).eq('id', profile.id);
-
-    // 3. Call Bigisub API
-    const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
+    // 2. Call Bigisub Airtime API
+    const apiKey = (process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285').trim();
     const networkId = getNetworkId(network);
 
     const bigisubRes = await fetch('https://bigisub.ng/api/topup/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Token ${apiKey.trim()}`,
+        'Authorization': `Token ${apiKey}`,
       },
       body: JSON.stringify({
         network: networkId,
@@ -86,40 +76,37 @@ export async function POST(req: Request) {
     });
 
     const responseText = await bigisubRes.text();
-    let bigisubData: any = {};
 
-    try {
-      bigisubData = JSON.parse(responseText);
-    } catch (e) {
-      // Refund if Bigisub returned raw HTML error
-      await supabaseAdmin.from('profiles').update({ wallet_balance: profile.wallet_balance }).eq('id', profile.id);
-      return NextResponse.json({ success: false, message: `Provider Error: ${responseText.slice(0, 100)}` }, { status: 400 });
-    }
-
-    const isSuccessful = 
-      bigisubRes.ok && 
-      (bigisubData?.status === 'success' || 
-       bigisubData?.Status === 'successful' || 
-       bigisubData?.Status === 'delivered' || 
-       bigisubData?.status === true);
-
-    // 4. Refund if failed
-    if (!isSuccessful) {
-      await supabaseAdmin.from('profiles').update({ wallet_balance: profile.wallet_balance }).eq('id', profile.id);
-
-      const errorMsg = 
-        bigisubData?.error || 
-        bigisubData?.message || 
-        bigisubData?.detail || 
-        'Airtime purchase failed on Bigisub.';
-
+    // Catch non-JSON (HTML 404/500) responses directly
+    if (!bigisubRes.ok || responseText.startsWith('<!DOCTYPE') || responseText.startsWith('<html')) {
       return NextResponse.json({ 
         success: false, 
-        message: typeof errorMsg === 'object' ? JSON.stringify(errorMsg) : String(errorMsg) 
+        message: `Bigisub returned HTTP ${bigisubRes.status}. Check API Endpoint URL or Key in Bigisub Dashboard.` 
       }, { status: 400 });
     }
 
-    // 5. Save Successful Transaction
+    let bigisubData: any = {};
+    try {
+      bigisubData = JSON.parse(responseText);
+    } catch (e) {
+      return NextResponse.json({ success: false, message: 'Invalid response from Bigisub API.' }, { status: 400 });
+    }
+
+    const isSuccessful = 
+      bigisubData?.status === 'success' || 
+      bigisubData?.Status === 'successful' || 
+      bigisubData?.Status === 'delivered' || 
+      bigisubData?.status === true;
+
+    if (!isSuccessful) {
+      const errorMsg = bigisubData?.error || bigisubData?.message || bigisubData?.detail || 'Airtime transaction failed.';
+      return NextResponse.json({ success: false, message: String(errorMsg) }, { status: 400 });
+    }
+
+    // 3. Deduct Wallet and Save Transaction
+    const newBalance = profile.wallet_balance - numAmount;
+    await supabaseAdmin.from('profiles').update({ wallet_balance: newBalance }).eq('id', profile.id);
+
     const reference = bigisubData?.id || Date.now().toString();
     await supabaseAdmin.from('transactions').insert({
       user_id: profile.id,
