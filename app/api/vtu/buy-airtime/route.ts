@@ -72,7 +72,7 @@ export async function POST(req: Request) {
       network: networkId,
       mobile_number: cleanPhone,
       phone_number: cleanPhone,
-      amount: String(numAmount),
+      amount: numAmount,
       airtime_type: 'VTU',
       ported_number: false,
       pin: "1234",
@@ -96,14 +96,21 @@ export async function POST(req: Request) {
       bigisubData = { error: responseText };
     }
 
+    const topStatus = String(bigisubData?.status || bigisubData?.Status || '').toLowerCase();
+    const innerStatus = String(bigisubData?.data?.status || bigisubData?.data?.Status || '').toLowerCase();
+    const isSuccessFlag = bigisubData?.success === true || bigisubData?.data?.success === true;
+
+    const isExplicitFailure = 
+      topStatus === 'failed' || topStatus === 'fail' || topStatus === 'reversed' ||
+      innerStatus === 'failed' || innerStatus === 'fail' || innerStatus === 'reversed';
+
     const isSuccessful = 
       bigisubRes.ok && 
-      (bigisubData?.status === 'success' || 
-       bigisubData?.status === 'successful' || 
-       bigisubData?.success === true);
+      !isExplicitFailure && 
+      (topStatus === 'success' || topStatus === 'successful' || innerStatus === 'success' || isSuccessFlag);
 
     if (!isSuccessful) {
-      // Refund user balance
+      // Refund user balance on local DB
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
@@ -114,6 +121,7 @@ export async function POST(req: Request) {
         errorReason = 
           bigisubData?.message || 
           bigisubData?.detail || 
+          bigisubData?.data?.api_response || 
           bigisubData?.error || 
           JSON.stringify(bigisubData);
       } else if (responseText) {
