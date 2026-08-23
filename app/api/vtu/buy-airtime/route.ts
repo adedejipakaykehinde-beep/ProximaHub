@@ -1,110 +1,160 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
+// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: 9MOBILE, 4: AIRTEL)
+function getBigisubNetworkId(network: string): number {
+  const net = network.toLowerCase().trim();
+  switch (net) {
+    case 'mtn':
+      return 1;
+    case 'glo':
+      return 2;
+    case '9mobile':
+    case 'etisalat':
+      return 3;
+    case 'airtel':
+      return 4;
+    default:
+      return 1;
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const { network, phoneNumber, amount } = await req.json();
+    const body = await req.json();
+    const { network, phoneNumber, phone, amount, userId } = body;
 
-    // 1. Get user session from Authorization header
-    const authHeader = req.headers.get('Authorization');
-    const token = authHeader?.replace('Bearer ', '');
-
-    if (!token) {
-      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-    if (authErr || !user) {
-      return NextResponse.json({ success: false, message: 'Invalid session' }, { status: 401 });
-    }
-
-    // 2. Validate request payload
-    if (!phoneNumber || !amount || !network) {
-      return NextResponse.json({ success: false, message: 'Missing required fields' }, { status: 400 });
+    const targetPhone = phoneNumber || phone;
+    if (!network || !targetPhone || !amount) {
+      return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
     }
 
     const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount < 50) {
+      return NextResponse.json({ message: 'Minimum airtime amount is ₦50' }, { status: 400 });
+    }
 
-    // 3. Fetch user wallet balance
-    const { data: profile } = await supabase
+    // 1. Authenticate user
+    const authHeader = req.headers.get('Authorization');
+    const token = authHeader ? authHeader.replace('Bearer ', '') : null;
+
+    const { data: { user }, error: authError } = token 
+      ? await supabase.auth.getUser(token)
+      : await supabase.auth.getUser();
+
+    const targetUserId = user?.id || userId;
+
+    if (!targetUserId) {
+      return NextResponse.json({ message: 'Unauthorized. Please log in.' }, { status: 401 });
+    }
+
+    // 2. Check profile balance
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('wallet_balance')
-      .eq('id', user.id)
+      .select('id, wallet_balance')
+      .eq('id', targetUserId)
       .single();
 
-    if (!profile || (profile.wallet_balance || 0) < numAmount) {
-      return NextResponse.json({ success: false, message: 'Insufficient wallet balance' }, { status: 400 });
+    if (profileError || !profile) {
+      return NextResponse.json({ message: 'User profile not found' }, { status: 404 });
     }
 
-    // 4. Map network string to VTPass serviceID
-    const serviceMap: Record<string, string> = {
-      mtn: 'mtn',
-      glo: 'glo',
-      airtel: 'airtel',
-      '9mobile': 'etisalat',
-    };
-
-    const serviceID = serviceMap[network.toLowerCase()];
-    if (!serviceID) {
-      return NextResponse.json({ success: false, message: 'Invalid network selected' }, { status: 400 });
+    if (profile.wallet_balance < numAmount) {
+      return NextResponse.json({ message: 'Insufficient wallet balance' }, { status: 400 });
     }
 
-    // Generate unique Request ID
-    const requestId = new Date().toISOString().replace(/[-T:.Z]/g, '').slice(0, 12) + Math.random().toString(36).substring(2, 7);
+    // 3. Deduct balance temporarily
+    const newBalance = profile.wallet_balance - numAmount;
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ wallet_balance: newBalance })
+      .eq('id', profile.id);
 
-    // 5. Send request to VTPass API
-    const vtpassRes = await fetch('https://sandbox.vtpass.com/api/pay', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': process.env.VTPASS_API_KEY || '',
-        'secret-key': process.env.VTPASS_SECRET_KEY || '',
-      },
-      body: JSON.stringify({
-        request_id: requestId,
-        serviceID: serviceID,
-        amount: numAmount,
-        phone: phoneNumber,
-      }),
-    });
+    if (updateError) {
+      return NextResponse.json({ message: 'Failed to process balance deduction' }, { status: 500 });
+    }
 
-    const vtpassData = await vtpassRes.json();
+    // 4. Call Bigisub Airtime API
+    const networkId = getBigisubNetworkId(network);
+    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng/api';
 
-    // 6. Verify success ("000" means success in VTPass)
-    if (vtpassData.code === '000') {
-      const updatedBalance = profile.wallet_balance - numAmount;
+    let bigisubData: any = {};
+    let isSuccessful = false;
 
-      // Deduct balance
+    try {
+      const bigisubRes = await fetch(`${baseUrl}/topup/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
+        },
+        body: JSON.stringify({
+          network: networkId,
+          amount: numAmount,
+          mobile_number: targetPhone,
+          airtime_type: 'VTU',
+          Ported_number: true,
+        }),
+      });
+
+      const responseText = await bigisubRes.text();
+
+      try {
+        bigisubData = JSON.parse(responseText);
+      } catch (jsonErr) {
+        console.error('Bigisub non-JSON response:', responseText);
+        bigisubData = { error: 'Invalid response from airtime provider API.' };
+      }
+
+      isSuccessful = 
+        bigisubRes.ok && 
+        (bigisubData?.status === 'success' || 
+         bigisubData?.Status === 'successful' || 
+         bigisubData?.status === true);
+
+    } catch (apiErr: any) {
+      console.error('Bigisub airtime network error:', apiErr);
+      bigisubData = { error: 'Network error connecting to airtime provider.' };
+    }
+
+    // 5. Refund user if purchase fails
+    if (!isSuccessful) {
       await supabase
         .from('profiles')
-        .update({ wallet_balance: updatedBalance })
-        .eq('id', user.id);
+        .update({ wallet_balance: profile.wallet_balance })
+        .eq('id', profile.id);
 
-      // Record transaction
-      await supabase.from('transactions').insert([
-        {
-          user_id: user.id,
-          type: 'airtime',
-          details: `${network.toUpperCase()} Airtime to ${phoneNumber}`,
-          amount: numAmount,
-          status: 'success',
-        },
-      ]);
+      const errorReason = 
+        bigisubData?.error || 
+        bigisubData?.message || 
+        bigisubData?.detail || 
+        'Airtime purchase failed on network provider.';
 
-      return NextResponse.json({
-        success: true,
-        message: 'Airtime purchase successful',
-        newBalance: updatedBalance,
-      }, { status: 200 });
-    } else {
-      return NextResponse.json({
-        success: false,
-        message: vtpassData.response_description || 'VTU provider error',
-      }, { status: 400 });
+      return NextResponse.json(
+        { success: false, message: errorReason },
+        { status: 400 }
+      );
     }
 
+    // 6. Log transaction history
+    const reference = bigisubData?.id || bigisubData?.ident || Date.now().toString();
+    await supabase.from('transactions').insert({
+      user_id: profile.id,
+      type: 'debit',
+      details: `${network.toUpperCase()} Airtime (₦${numAmount}) to ${targetPhone} - Ref: ${reference}`,
+      amount: numAmount,
+      status: 'success',
+    });
+
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Airtime purchase successful!',
+      newBalance,
+      reference 
+    });
+
   } catch (error: any) {
-    console.error('VTU Airtime error:', error);
-    return NextResponse.json({ success: false, message: 'Internal Server Error' }, { status: 500 });
+    console.error('Airtime purchase error:', error);
+    return NextResponse.json({ success: false, message: error?.message || 'Server error' }, { status: 500 });
   }
 }
