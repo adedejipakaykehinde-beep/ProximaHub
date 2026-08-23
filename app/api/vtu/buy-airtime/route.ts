@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: 'Session expired. Please log in again.' }, { status: 401 });
     }
 
-    // 1. Verify Wallet Balance
+    // 1. Verify Balance
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, wallet_balance')
@@ -56,34 +56,54 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: `Insufficient balance (₦${profile.wallet_balance}).` }, { status: 400 });
     }
 
-    // 2. Call Bigisub API with redirect protection
+    // 2. Try Bigisub Endpoints in order
     const apiKey = '1e34035a5330a62c7066697df8cb485c92d85285';
     const networkId = getNetworkId(network);
 
-    const bigisubRes = await fetch('https://bigisub.ng/api/topup/', {
-      method: 'POST',
-      redirect: 'manual',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Authorization': `Token ${apiKey}`,
-      },
-      body: JSON.stringify({
-        network: networkId,
-        amount: numAmount,
-        mobile_number: targetPhone,
-        airtime_type: 'VTU',
-        Ported_number: true,
-      }),
-    });
+    const endpoints = [
+      'https://bigisub.ng/api/topup/',
+      'https://bigisub.ng/api/airtime/',
+      'https://bigisub.ng/api/pay/'
+    ];
 
-    const responseText = await bigisubRes.text();
+    let bigisubRes: Response | null = null;
+    let responseText = '';
+    let successfulEndpoint = '';
 
-    // Catch redirects (301/302) or HTML responses
-    if (bigisubRes.status >= 300 && bigisubRes.status < 400) {
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Token ${apiKey}`,
+          },
+          body: JSON.stringify({
+            network: networkId,
+            amount: numAmount,
+            mobile_number: targetPhone,
+            airtime_type: 'VTU',
+            Ported_number: true,
+          }),
+        });
+
+        const text = await res.text();
+        if (res.status !== 404 && !text.startsWith('<!DOCTYPE') && !text.startsWith('<html')) {
+          bigisubRes = res;
+          responseText = text;
+          successfulEndpoint = url;
+          break;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (!bigisubRes || !responseText) {
       return NextResponse.json({ 
         success: false, 
-        message: 'Bigisub redirected the request. Please verify topup endpoint in Bigisub API documentation.' 
+        message: 'Bigisub airtime endpoints returned 404. Check documentation inside bigisub.ng dashboard under API settings.' 
       }, { status: 400 });
     }
 
@@ -91,10 +111,7 @@ export async function POST(req: Request) {
     try {
       bigisubData = JSON.parse(responseText);
     } catch (e) {
-      return NextResponse.json({ 
-        success: false, 
-        message: `Provider error (${bigisubRes.status}): Received HTML instead of JSON.` 
-      }, { status: 400 });
+      return NextResponse.json({ success: false, message: `Invalid response from Bigisub at ${successfulEndpoint}` }, { status: 400 });
     }
 
     const isSuccessful = 
@@ -108,7 +125,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: String(errorMsg) }, { status: 400 });
     }
 
-    // 3. Deduct Wallet & Save Transaction
+    // 3. Deduct Wallet & Save Record
     const newBalance = profile.wallet_balance - numAmount;
     await supabaseAdmin.from('profiles').update({ wallet_balance: newBalance }).eq('id', profile.id);
 
