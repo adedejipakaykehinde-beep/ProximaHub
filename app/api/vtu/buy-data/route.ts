@@ -59,7 +59,7 @@ export async function POST(req: Request) {
       plan: Number(planId),
       plan_id: Number(planId),
       ported_number: false,
-      pin: "1234", // Make sure this matches your 4-digit PIN in your Bigisub portal settings
+      pin: "1234", // Matches your 4-digit Bigisub transaction PIN
     };
 
     const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/data/purchase/`, {
@@ -80,24 +80,34 @@ export async function POST(req: Request) {
       bigisubData = { error: responseText };
     }
 
+    // Extract statuses safely across all variations returned by Bigisub
+    const topStatus = String(bigisubData?.status || bigisubData?.Status || '').toLowerCase();
+    const innerStatus = String(bigisubData?.data?.status || bigisubData?.data?.Status || '').toLowerCase();
+    const isSuccessFlag = bigisubData?.success === true || bigisubData?.data?.success === true;
+
+    // Check for explicit failure keywords
+    const isExplicitFailure = 
+      topStatus === 'failed' || topStatus === 'fail' || topStatus === 'reversed' ||
+      innerStatus === 'failed' || innerStatus === 'fail' || innerStatus === 'reversed';
+
     const isSuccessful = 
       bigisubRes.ok && 
-      (bigisubData?.status === 'success' || 
-       bigisubData?.status === 'successful' || 
-       bigisubData?.success === true);
+      !isExplicitFailure && 
+      (topStatus === 'success' || topStatus === 'successful' || innerStatus === 'success' || isSuccessFlag);
 
     if (!isSuccessful) {
-      // Refund user balance
+      // Refund user balance in Supabase
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
         .eq('id', profile.id);
 
-      let errorReason = 'Validation failed on provider network.';
+      let errorReason = 'Transaction failed or was refunded by gateway provider.';
       if (typeof bigisubData === 'object') {
         errorReason = 
           bigisubData?.message || 
           bigisubData?.detail || 
+          bigisubData?.data?.api_response || 
           bigisubData?.error || 
           JSON.stringify(bigisubData);
       } else if (responseText) {
