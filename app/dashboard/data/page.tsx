@@ -89,13 +89,23 @@ export default function DashboardPage() {
       const data = await res.json();
 
       if (res.ok && data.success && Array.isArray(data.plans)) {
-        const mappedPlans = data.plans.map((p: any) => ({
-          variation_code: p.id,
-          name: p.size || `${p.plan_volume}MB`,
-          variation_amount: Number(p.amount || p.plan_amount || 0),
-          type: p.plantype || 'DATA',
-          duration: p.validity || '30 days',
-        }));
+        const mappedPlans = data.plans.map((p: any) => {
+          // Format size label cleanly (e.g. 1GB or 500MB)
+          let sizeLabel = p.size ? String(p.size) : '';
+          const volume = p.plan_volume || '';
+          if (volume && !sizeLabel.toLowerCase().includes('gb') && !sizeLabel.toLowerCase().includes('mb')) {
+            sizeLabel = `${sizeLabel}${volume}`;
+          }
+
+          return {
+            variation_code: p.id,
+            name: sizeLabel || `${p.size || p.plan_volume || ''}`,
+            variation_amount: Number(p.plan_amount || p.amount || 0), // Uses actual ₦300/₦435 charged by Bigisub
+            type: p.plan_type || p.plantype || 'DATA',
+            duration: p.validity || '30 days',
+          };
+        });
+
         setVariations(mappedPlans);
       } else {
         setVariations([]);
