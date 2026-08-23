@@ -56,33 +56,30 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    // 3. Deduct balance temporarily
+    // 3. Temporarily deduct user wallet balance
     await supabase
       .from('profiles')
       .update({ wallet_balance: profile.wallet_balance - numAmount })
       .eq('id', profile.id);
 
-    // 4. Send Request to Bigisub
-    const networkId = getBigisubNetworkId(network);
-    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://api.bigisub.ng';
+    // 4. Prepare Exact Payload as specified in Bigisub API Documentation
+    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng';
     const apiKey = process.env.BIGISUB_API_KEY || '1e34035a5330a62c7066697df8cb485c92d85285';
     const cleanPhone = String(phoneNumber).trim();
 
     const payload = {
-      network: networkId,
-      mobile_number: cleanPhone,
+      network: getBigisubNetworkId(network),
       phone_number: cleanPhone,
-      amount: numAmount,
-      airtime_type: 'VTU',
-      ported_number: false,
-      pin: "1234",
+      amount: String(numAmount), // Bigisub documentation requires amount as string "100"
+      airtime_type: "vtu",       // Lowercase "vtu" as shown in request body
+      pin: "1234"                // 4-digit Bigisub PIN
     };
 
     const bigisubRes = await fetch(`${baseUrl}/api/v2/vtu/airtime/purchase/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Token ${apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify(payload),
     });
@@ -96,8 +93,8 @@ export async function POST(req: Request) {
       bigisubData = { error: responseText };
     }
 
-    const topStatus = String(bigisubData?.status || bigisubData?.Status || '').toLowerCase();
-    const innerStatus = String(bigisubData?.data?.status || bigisubData?.data?.Status || '').toLowerCase();
+    const topStatus = String(bigisubData?.status || '').toLowerCase();
+    const innerStatus = String(bigisubData?.data?.status || '').toLowerCase();
     const isSuccessFlag = bigisubData?.success === true || bigisubData?.data?.success === true;
 
     const isExplicitFailure = 
@@ -110,7 +107,7 @@ export async function POST(req: Request) {
       (topStatus === 'success' || topStatus === 'successful' || innerStatus === 'success' || isSuccessFlag);
 
     if (!isSuccessful) {
-      // Refund user balance on local DB
+      // Refund balance if transaction fails on Bigisub
       await supabase
         .from('profiles')
         .update({ wallet_balance: profile.wallet_balance })
@@ -131,7 +128,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: errorReason }, { status: 400 });
     }
 
-    // 5. Insert successful transaction
+    // 5. Save transaction record to Supabase
     const newBalance = profile.wallet_balance - numAmount;
     const reference = bigisubData?.data?.reference || bigisubData?.reference || Date.now().toString();
 
