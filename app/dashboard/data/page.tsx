@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 
 interface Variation {
-  variation_code: string;
+  variation_code: string | number;
   name: string;
   variation_amount: number;
   type?: string;
@@ -22,47 +22,22 @@ interface Transaction {
   created_at: string;
 }
 
-// Bigisub Plan Catalog
-const BIGISUB_PLANS: Record<string, Variation[]> = {
-  MTN: [
-    { variation_code: 'mtn-1gb-awoof', name: '1GB', variation_amount: 269, type: 'GIFTING', duration: '1 day Awoof' },
-    { variation_code: 'mtn-1gb-sme', name: '1GB', variation_amount: 265, type: 'SME', duration: '30 Days' },
-    { variation_code: 'mtn-20mb', name: '20MB', variation_amount: 25, type: 'GIFTING', duration: '1 day [FACEBOOK]' },
-    { variation_code: 'mtn-200mb-soc', name: '200MB', variation_amount: 99, type: 'GIFTING', duration: '1 day [ALL SOCIAL]' },
-    { variation_code: 'mtn-500mb-sme', name: '500MB', variation_amount: 135, type: 'SME', duration: '30 Days' },
-    { variation_code: 'mtn-2gb-sme', name: '2GB', variation_amount: 530, type: 'SME', duration: '30 Days' },
-    { variation_code: 'mtn-3gb-sme', name: '3GB', variation_amount: 795, type: 'SME', duration: '30 Days' },
-    { variation_code: 'mtn-5gb-sme', name: '5GB', variation_amount: 1325, type: 'SME', duration: '30 Days' },
-    { variation_code: 'mtn-10gb-sme', name: '10GB', variation_amount: 2650, type: 'SME', duration: '30 Days' },
-  ],
-  Airtel: [
-    { variation_code: 'airtel-100mb', name: '100MB', variation_amount: 100, type: 'GIFTING', duration: '1 Day' },
-    { variation_code: 'airtel-300mb', name: '300MB', variation_amount: 200, type: 'GIFTING', duration: '2 Days' },
-    { variation_code: 'airtel-1gb', name: '1GB', variation_amount: 300, type: 'GIFTING', duration: '1 Day' },
-    { variation_code: 'airtel-2gb', name: '2GB', variation_amount: 600, type: 'GIFTING', duration: '2 Days' },
-    { variation_code: 'airtel-5gb', name: '5GB', variation_amount: 1500, type: 'CG', duration: '14 Days' },
-  ],
-  Glo: [
-    { variation_code: 'glo-200mb', name: '200MB', variation_amount: 100, type: 'GIFTING', duration: '1 Day' },
-    { variation_code: 'glo-1gb', name: '1GB', variation_amount: 280, type: 'CG', duration: '30 Days' },
-    { variation_code: 'glo-2gb', name: '2GB', variation_amount: 560, type: 'CG', duration: '30 Days' },
-    { variation_code: 'glo-3gb', name: '3GB', variation_amount: 840, type: 'CG', duration: '30 Days' },
-  ],
-  '9mobile': [
-    { variation_code: '9mob-1gb', name: '1GB', variation_amount: 220, type: 'SME', duration: '30 Days' },
-    { variation_code: '9mob-2gb', name: '2GB', variation_amount: 440, type: 'SME', duration: '30 Days' },
-    { variation_code: '9mob-5gb', name: '5GB', variation_amount: 1100, type: 'SME', duration: '30 Days' },
-  ],
+// Network ID Mapping according to Bigisub Docs
+const NETWORK_IDS: Record<string, number> = {
+  MTN: 1,
+  Glo: 2,
+  Airtel: 3,
+  '9mobile': 4,
 };
 
 export default function DashboardPage() {
   const router = useRouter();
   const [selectedNetwork, setSelectedNetwork] = useState('MTN');
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [selectedPlanCode, setSelectedPlanCode] = useState('');
-  const [variations, setVariations] = useState<Variation[]>(BIGISUB_PLANS['MTN']);
+  const [selectedPlanCode, setSelectedPlanCode] = useState<string | number>('');
+  const [variations, setVariations] = useState<Variation[]>([]);
   const [fetchingPlans, setFetchingPlans] = useState(false);
-  
+
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [fullName, setFullName] = useState<string>('User');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -102,27 +77,35 @@ export default function DashboardPage() {
     }
   };
 
-  const loadNetworkPlans = async (network: string) => {
+  const loadNetworkPlans = async (networkName: string) => {
     setFetchingPlans(true);
     setSelectedPlanCode('');
     setErrorMsg('');
-    
+
+    const networkId = NETWORK_IDS[networkName] || 1;
+
     try {
-      const res = await fetch(`/api/vtu/variations?network=${network.toLowerCase()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.variations) && data.variations.length > 0) {
-          setVariations(data.variations);
-          setFetchingPlans(false);
-          return;
-        }
+      const res = await fetch(`/api/vtu/data/plans?network=${networkId}`);
+      const data = await res.json();
+
+      if (res.ok && data.success && Array.isArray(data.plans)) {
+        const mappedPlans = data.plans.map((p: any) => ({
+          variation_code: p.id,
+          name: p.size || `${p.plan_volume}MB`,
+          variation_amount: Number(p.amount || p.plan_amount || 0),
+          type: p.plantype || 'DATA',
+          duration: p.validity || '30 days',
+        }));
+        setVariations(mappedPlans);
+      } else {
+        setVariations([]);
       }
     } catch (err) {
-      console.log('Using local Bigisub catalog');
+      console.error('Error fetching plans:', err);
+      setVariations([]);
+    } finally {
+      setFetchingPlans(false);
     }
-
-    setVariations(BIGISUB_PLANS[network] || []);
-    setFetchingPlans(false);
   };
 
   useEffect(() => {
@@ -144,14 +127,16 @@ export default function DashboardPage() {
     setErrorMsg('');
     setSuccessMsg('');
 
-    if (!phoneNumber || phoneNumber.length < 11) {
+    const cleanedPhone = phoneNumber.trim();
+
+    if (!cleanedPhone || cleanedPhone.length < 11) {
       setErrorMsg('Please enter a valid 11-digit phone number');
       return;
     }
 
-    const chosenPlan = variations.find((v) => v.variation_code === selectedPlanCode);
+    const chosenPlan = variations.find((v) => String(v.variation_code) === String(selectedPlanCode));
     if (!chosenPlan) {
-      setErrorMsg('Please select a data plan card below');
+      setErrorMsg('Please select a data plan below');
       return;
     }
 
@@ -174,9 +159,11 @@ export default function DashboardPage() {
           'Authorization': `Bearer ${session?.access_token || ''}`
         },
         body: JSON.stringify({
-          network: selectedNetwork,
+          network: NETWORK_IDS[selectedNetwork] || 1,
           planId: chosenPlan.variation_code,
-          phoneNumber,
+          phoneNumber: cleanedPhone,
+          phone_number: cleanedPhone,
+          phone: cleanedPhone,
           amount: planAmount,
         }),
       });
@@ -184,12 +171,12 @@ export default function DashboardPage() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setSuccessMsg(`Successfully processed ${selectedNetwork} ${chosenPlan.name} for ${phoneNumber}!`);
+        setSuccessMsg(`Successfully processed ${selectedNetwork} ${chosenPlan.name} for ${cleanedPhone}!`);
         setPhoneNumber('');
         setSelectedPlanCode('');
         fetchUserData();
       } else {
-        setErrorMsg(data.message || 'Transaction failed. Please check your network or wallet balance.');
+        setErrorMsg(data.message || 'Transaction failed. Please check network or wallet balance.');
       }
     } catch (err: any) {
       setErrorMsg('Network error. Please try again.');
@@ -309,11 +296,13 @@ export default function DashboardPage() {
                 </label>
                 
                 {fetchingPlans ? (
-                  <div className="text-center py-8 text-slate-500">Loading plans...</div>
+                  <div className="text-center py-8 text-slate-500">Loading live plans...</div>
+                ) : variations.length === 0 ? (
+                  <div className="text-center py-8 text-slate-500">No plans available for this network.</div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[380px] overflow-y-auto pr-1">
                     {variations.map((plan) => {
-                      const isSelected = selectedPlanCode === plan.variation_code;
+                      const isSelected = String(selectedPlanCode) === String(plan.variation_code);
                       return (
                         <div
                           key={plan.variation_code}
@@ -333,7 +322,7 @@ export default function DashboardPage() {
                                 </span>
                               )}
                             </div>
-                            <p className="text-xs text-slate-400 font-medium mb-3">{plan.duration || '30 Days'}</p>
+                            <p className="text-xs text-slate-400 font-medium mb-3">{plan.duration}</p>
                           </div>
                           <div className="text-base font-black text-blue-400">
                             ₦{plan.variation_amount}
