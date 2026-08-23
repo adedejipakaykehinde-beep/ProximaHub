@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 
-// Map network string to Bigisub Network IDs (1: MTN, 2: GLO, 3: 9MOBILE, 4: AIRTEL)
 function getBigisubNetworkId(network: string): number {
   const net = network.toLowerCase().trim();
   switch (net) {
@@ -38,7 +37,7 @@ export async function POST(req: Request) {
     const authHeader = req.headers.get('Authorization');
     const token = authHeader ? authHeader.replace('Bearer ', '') : null;
 
-    const { data: { user }, error: authError } = token 
+    const { data: { user } } = token 
       ? await supabase.auth.getUser(token)
       : await supabase.auth.getUser();
 
@@ -76,17 +75,18 @@ export async function POST(req: Request) {
 
     // 4. Call Bigisub Airtime API
     const networkId = getBigisubNetworkId(network);
-    const baseUrl = process.env.BIGISUB_BASE_URL || 'https://bigisub.ng/api';
+    const apiKey = process.env.BIGISUB_API_KEY || '';
 
     let bigisubData: any = {};
     let isSuccessful = false;
 
     try {
-      const bigisubRes = await fetch(`${baseUrl}/topup/`, {
+      // Try primary topup endpoint
+      let bigisubRes = await fetch('https://bigisub.ng/api/topup/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Token ${process.env.BIGISUB_API_KEY}`,
+          'Authorization': `Token ${apiKey}`,
         },
         body: JSON.stringify({
           network: networkId,
@@ -97,13 +97,30 @@ export async function POST(req: Request) {
         }),
       });
 
-      const responseText = await bigisubRes.text();
+      let responseText = await bigisubRes.text();
+
+      // If primary endpoint fails, fallback to v2 endpoint
+      if (!bigisubRes.ok || responseText.trim().startsWith('<')) {
+        bigisubRes = await fetch('https://bigisub.ng/api/v2/airtime/purchase', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            network: network.toUpperCase(),
+            amount: numAmount,
+            phone: targetPhone,
+          }),
+        });
+        responseText = await bigisubRes.text();
+      }
 
       try {
         bigisubData = JSON.parse(responseText);
       } catch (jsonErr) {
-        console.error('Bigisub non-JSON response:', responseText);
-        bigisubData = { error: 'Invalid response from airtime provider API.' };
+        console.error('Bigisub Raw Error Output:', responseText);
+        bigisubData = { error: 'API Key invalid or provider service unavailable.' };
       }
 
       isSuccessful = 
@@ -128,7 +145,7 @@ export async function POST(req: Request) {
         bigisubData?.error || 
         bigisubData?.message || 
         bigisubData?.detail || 
-        'Airtime purchase failed on network provider.';
+        'Airtime purchase failed on provider. Your wallet was not charged.';
 
       return NextResponse.json(
         { success: false, message: errorReason },
