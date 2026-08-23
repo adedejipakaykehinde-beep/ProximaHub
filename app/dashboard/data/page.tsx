@@ -22,17 +22,14 @@ interface Transaction {
   created_at: string;
 }
 
-// Bigisub Plan Mapping Matrix
+// Bigisub Plan Catalog
 const BIGISUB_PLANS: Record<string, Variation[]> = {
   MTN: [
-    { variation_code: 'mtn-20mb', name: '20MB', variation_amount: 25, type: 'GIFTING', duration: '1 day [FACEBOOK]' },
-    { variation_code: 'mtn-20mb-wa', name: '20MB', variation_amount: 25, type: 'GIFTING', duration: '1 day [WHATSAPP]' },
-    { variation_code: 'mtn-200mb-soc', name: '200MB', variation_amount: 99, type: 'GIFTING', duration: '1 day [ALL SOCIAL]' },
-    { variation_code: 'mtn-200mb', name: '200MB', variation_amount: 110, type: 'GIFTING', duration: '1 day [ALL SOCIAL]' },
     { variation_code: 'mtn-1gb-awoof', name: '1GB', variation_amount: 269, type: 'GIFTING', duration: '1 day Awoof' },
-    { variation_code: 'mtn-1gb-daily', name: '1GB', variation_amount: 300, type: 'GIFTING', duration: 'Daily AWOOF' },
-    { variation_code: 'mtn-500mb-sme', name: '500MB', variation_amount: 135, type: 'SME', duration: '30 Days' },
     { variation_code: 'mtn-1gb-sme', name: '1GB', variation_amount: 265, type: 'SME', duration: '30 Days' },
+    { variation_code: 'mtn-20mb', name: '20MB', variation_amount: 25, type: 'GIFTING', duration: '1 day [FACEBOOK]' },
+    { variation_code: 'mtn-200mb-soc', name: '200MB', variation_amount: 99, type: 'GIFTING', duration: '1 day [ALL SOCIAL]' },
+    { variation_code: 'mtn-500mb-sme', name: '500MB', variation_amount: 135, type: 'SME', duration: '30 Days' },
     { variation_code: 'mtn-2gb-sme', name: '2GB', variation_amount: 530, type: 'SME', duration: '30 Days' },
     { variation_code: 'mtn-3gb-sme', name: '3GB', variation_amount: 795, type: 'SME', duration: '30 Days' },
     { variation_code: 'mtn-5gb-sme', name: '5GB', variation_amount: 1325, type: 'SME', duration: '30 Days' },
@@ -121,10 +118,9 @@ export default function DashboardPage() {
         }
       }
     } catch (err) {
-      console.log('Using local Bigisub plans catalog fallback');
+      console.log('Using local Bigisub catalog');
     }
 
-    // Fallback to local Bigisub catalog if API endpoint returns 404 HTML
     setVariations(BIGISUB_PLANS[network] || []);
     setFetchingPlans(false);
   };
@@ -185,27 +181,19 @@ export default function DashboardPage() {
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-
       const data = await res.json();
 
-      if (data.success) {
-        setSuccessMsg(`Successfully sent ${selectedNetwork} ${chosenPlan.name} to ${phoneNumber}!`);
+      if (res.ok && data.success) {
+        setSuccessMsg(`Successfully processed ${selectedNetwork} ${chosenPlan.name} for ${phoneNumber}!`);
         setPhoneNumber('');
         setSelectedPlanCode('');
         fetchUserData();
       } else {
-        setErrorMsg(data.message || 'Transaction failed. Please try again.');
+        setErrorMsg(data.message || 'Transaction failed. Please check your network or wallet balance.');
       }
     } catch (err: any) {
-      // Simulate Sandbox success if backend API route is not created yet
-      alert(`[Demo Mode] Simulated purchase of ${selectedNetwork} ${chosenPlan.name} for ₦${planAmount} on ${phoneNumber}`);
-      setSuccessMsg(`[Test Mode] Order placed for ${phoneNumber}`);
-      setPhoneNumber('');
-      setSelectedPlanCode('');
-    } finally {
+      setErrorMsg('Network error. Please try again.');
+    } fontFinally: {
       setLoading(false);
     }
   };
@@ -217,7 +205,6 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      {/* Top Navbar */}
       <nav className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -243,9 +230,7 @@ export default function DashboardPage() {
         </div>
       </nav>
 
-      {/* Main Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Wallet Balance Card */}
         <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl mb-8 border border-blue-500/20 relative overflow-hidden">
           <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
@@ -263,7 +248,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Purchase Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 bg-slate-800/60 rounded-3xl border border-slate-700/60 p-6 sm:p-8 shadow-xl backdrop-blur-sm">
             <h3 className="text-xl font-black text-white mb-6 flex items-center gap-2">
@@ -283,7 +267,6 @@ export default function DashboardPage() {
             )}
 
             <form onSubmit={handlePurchase} className="space-y-6">
-              {/* Network Tabs */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
                   Select Network Provider
@@ -306,7 +289,6 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Phone Input */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
                   Recipient Phone Number
@@ -321,7 +303,6 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Bigisub Plan Cards Grid */}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
                   Select Data Plan
@@ -364,7 +345,6 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={loading || !selectedPlanCode}
@@ -375,7 +355,6 @@ export default function DashboardPage() {
             </form>
           </div>
 
-          {/* Transaction History Sidebar */}
           <div className="bg-slate-800/60 rounded-3xl border border-slate-700/60 p-6 shadow-xl backdrop-blur-sm h-fit">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold text-white">Recent Transactions</h3>
